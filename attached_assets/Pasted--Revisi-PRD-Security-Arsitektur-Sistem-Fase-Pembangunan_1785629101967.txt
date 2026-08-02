@@ -1,0 +1,272 @@
+# Revisi PRD — Security, Arsitektur Sistem, Fase Pembangunan & Halaman Langganan
+**Melengkapi:** PRD-001 Joben Connect + Section "Manual Asset Engine & Real-Time Price Layer"
+**Stack ditetapkan:** Node.js (backend), PostgreSQL (primary datastore)
+
+---
+
+# BAGIAN 1 — SECURITY ARCHITECTURE
+
+## 1.1 Prinsip
+
+Ancaman terbesar di platform ini bukan "server diretas" secara umum — tapi **kredensial user ke exchange/wallet dicuri lalu dipakai pihak lain untuk mengakses aset mereka secara langsung**. Setiap keputusan keamanan di bawah dirancang dengan asumsi: *credential vault adalah aset paling berharga di seluruh sistem, lebih dari database utama sekalipun.*
+
+## 1.2 Secret & Credential Management
+
+- API key/secret milik user (untuk connector exchange) **tidak pernah disimpan plaintext**. Gunakan *envelope encryption*: setiap secret dienkripsi AES-256-GCM dengan data key unik, data key itu sendiri dienkripsi oleh master key yang disimpan di KMS terpisah (mis. AWS KMS/HashiCorp Vault) — bukan di kode maupun environment variable service utama.
+- Secret vault berjalan sebagai **service terpisah** dari API utama, dengan akses dibatasi lewat internal auth (mTLS antar service), bukan diakses langsung oleh service yang menghadap publik.
+- **Read-only enforcement**: setiap kali user menambah API key exchange, sistem memvalidasi bahwa permission yang diberikan hanya read (bukan trade/withdraw) — jika exchange mengizinkan scoping ini, validasi terjadi sebelum key disimpan, bukan sesudah.
+- Rotasi & revocation: user bisa mencabut akses connector kapan saja lewat satu tombol, dan sistem langsung menghapus (bukan menonaktifkan) secret terkait dari vault.
+
+## 1.3 Authentication & Authorization
+
+- User-facing: JWT access token berumur pendek (15 menit) + refresh token tersimpan sebagai httpOnly secure cookie, dengan rotation setiap refresh (deteksi token replay).
+- MFA (TOTP) wajib untuk fitur sensitif: menambah connector baru, mengekspos API key developer, mengubah email/password akun.
+- Developer-facing (Public API): OAuth2 Client Credentials untuk server-to-server, scoped API key per environment (sandbox vs production) — key production dan sandbox tidak boleh bisa saling mengakses data.
+- RBAC berbasis Tenant → Workspace → User → Role (Owner/Admin/Member/Viewer) — konsisten dengan struktur multi-tenant di PRD awal, tapi diaktifkan bertahap (fase awal cukup single-user per akun, RBAC penuh masuk saat multi-tenant benar-benar dibutuhkan).
+
+## 1.4 Data Protection
+
+- Kolom sensitif (PII: email, nomor telepon jika ada) dienkripsi at-column-level di PostgreSQL (`pgcrypto` atau enkripsi di application layer sebelum insert) — bukan hanya mengandalkan disk encryption.
+- TLS 1.3 wajib untuk seluruh trafik, termasuk komunikasi internal antar service (mTLS untuk service-to-service).
+- Backup database terenkripsi, disimpan dengan retensi terbatas, dan **di infrastruktur lokal Indonesia** sesuai kebutuhan data residency.
+- Data minimization: field yang tidak esensial (mis. alamat presisi properti) sengaja tidak diminta — konsisten dengan desain Manual Asset Engine yang hanya minta kota/area.
+
+## 1.5 Application Security (spesifik Node.js)
+
+- Semua endpoint publik memakai validasi schema ketat (Zod) sebelum masuk business logic — menutup celah injection di level input, bukan hanya di level database.
+- Query database wajib lewat parameterized query/ORM (Prisma) — raw SQL string concatenation dilarang secara eksplisit di code review checklist.
+- `helmet` untuk HTTP security headers, rate limiting per API key & per IP (`rate-limiter-flexible` dengan Redis sebagai store) untuk cegah brute force dan abuse kuota.
+- Dependency scanning otomatis di CI (audit npm packages) setiap build — supply chain attack adalah risiko nyata untuk stack Node.js dengan banyak dependency.
+- **Third-party connector code (untuk marketplace, Fase 4) tidak pernah dieksekusi di process utama.** Dijalankan di container terisolasi per eksekusi (bukan `vm2`/sandboxing in-process yang riskan), dengan resource limit & network policy ketat (hanya boleh akses domain yang didaftarkan connector tsb).
+
+## 1.6 Audit & Compliance
+
+- Audit log **append-only** (tabel Postgres terpisah, tidak bisa di-update/delete lewat aplikasi) mencatat: siapa mengakses data siapa, kapan, dari mana — wajib untuk kepercayaan B2B dan investigasi insiden.
+- Pentest independen minimal 1x/tahun sebelum onboarding pelanggan B2B pertama; bug bounty program menyusul setelah API publik stabil (bukan di MVP).
+- Incident Response Plan minimal: kontak darurat, prosedur isolasi service terdampak, notifikasi user sesuai kewajiban UU PDP jika terjadi kebocoran data.
+
+---
+
+# BAGIAN 2 — ARSITEKTUR SISTEM (Node.js + PostgreSQL)
+
+## 2.1 Gambaran Umum
+
+```
+                         API Gateway (BFF) - Node.js (Fastify)
+                         Auth . Rate Limit . Request Routing
+                                    |
+      +--------------+-------------+-------------+--------------+
+      |              |             |             |              |
+  Auth Service   Connector     Manual Asset   Portfolio     Billing/
+                 Service        Engine        Engine        Subscription
+                 (Crypto)                                    Service
+                     |             |              ^              |
+                     v             v              |              v
+              Job Queue (BullMQ/Redis)-------------+       Payment Gateway
+              Sync jobs . Repricing jobs .                 (Midtrans/Xendit)
+              Notification jobs
+                                    |
+                                    v
+                         Price Intelligence Service
+                         (Node.js worker: fetch harga
+                         eksternal + cache)
+                                    |
+                                    v
+                      PostgreSQL (primary)
+                      + TimescaleDB extension
+                        untuk price time-series
+                      + Read Replica (scaling)
+                                    |
+                                    v
+                      Redis (cache + queue + rate limit store)
+```
+
+## 2.2 Breakdown Service (semua Node.js, framework Fastify — ringan, cocok untuk API-heavy platform)
+
+| Service | Tanggung Jawab | Catatan Teknis |
+|---|---|---|
+| **API Gateway (BFF)** | Routing, auth check, rate limiting, request validation | Titik masuk tunggal untuk web app & public API |
+| **Auth Service** | Login, JWT issuance, MFA, OAuth2 untuk developer | Terpisah dari service lain — paling sensitif |
+| **Connector Service (Crypto)** | Live connector ke exchange/wallet, sync job | Berjalan sebagai worker terpisah per exchange untuk isolasi kegagalan |
+| **Manual Asset Engine** | CRUD aset manual, trigger repricing job | Sesuai spesifikasi section sebelumnya |
+| **Price Intelligence Service** | Fetch harga dari provider eksternal, cache di Redis, simpan snapshot ke Postgres | Punya fallback provider per kategori |
+| **Portfolio Engine** | Kalkulasi net worth, P/L, agregasi lintas kategori | Baca dari Postgres, subscribe ke event repricing |
+| **Billing/Subscription Service** | Kelola plan, kuota, integrasi payment gateway | Detail di Bagian 4 |
+| **Notification Service** | Push/email/webhook | Konsumen dari job queue, bukan blocking call |
+
+## 2.3 Desain PostgreSQL
+
+- **PostgreSQL sebagai single source of truth**, dengan ekstensi **TimescaleDB** khusus untuk tabel `price_snapshot` — karena data ini deret waktu (time-series) volume tinggi, TimescaleDB memberi partisi otomatis (hypertable) tanpa perlu database time-series terpisah, tetap satu ekosistem Postgres.
+- Partisi tabel besar lain (mis. `sync_log`, `audit_log`) berdasarkan bulan, untuk menjaga performa query tetap stabil seiring data tumbuh.
+- **Read replica** dipisah untuk beban baca berat (dashboard portfolio, laporan) — write tetap ke primary, mengurangi lock contention.
+- Skema inti (disederhanakan):
+
+```sql
+users (id, email_encrypted, created_at, ...)
+tenants (id, name, plan_id, created_at)
+workspaces (id, tenant_id, name)
+connectors (id, user_id, type, status, credential_ref, last_sync_at)
+manual_assets (id, user_id, category, identifier, quantity, avg_buy_price, ...)
+price_snapshots (asset_identifier, category, price, source, delay_minutes, ts)  -- TimescaleDB hypertable
+portfolios (id, user_id, computed_at, total_net_worth, breakdown_json)
+subscriptions (id, tenant_id, plan_id, status, current_period_end, ...)
+usage_meters (id, tenant_id, metric, value, period)
+audit_log (id, actor_id, action, target, ts)  -- append-only
+```
+
+- Migrasi skema pakai tool migration Node.js (mis. Prisma Migrate) yang versioned & reversible — wajib sejak Phase 0, bukan ditambah belakangan.
+
+## 2.4 Caching & Queue
+
+- **Redis** dipakai untuk tiga fungsi terpisah (bukan satu instance dicampur semua): cache harga (TTL sesuai kategori — 1 menit untuk crypto, 15 menit untuk saham delayed), job queue (**BullMQ**) untuk sync & repricing & notifikasi, dan rate-limit counter.
+- Job queue dipisah per prioritas: sync crypto (high frequency, ringan) vs repricing saham/emas (terjadwal, batch) vs notifikasi (best-effort, retry-able) — supaya satu kategori lambat tidak menyumbat kategori lain.
+
+## 2.5 Ringkasan Stack
+
+| Layer | Teknologi |
+|---|---|
+| Backend runtime | Node.js (LTS) |
+| API Framework | Fastify |
+| Database | PostgreSQL + TimescaleDB extension |
+| ORM/Migration | Prisma |
+| Cache & Queue | Redis + BullMQ |
+| Secret Vault | HashiCorp Vault / KMS |
+| Payment Gateway | Midtrans atau Xendit (lokal Indonesia) |
+| Validasi Schema | Zod |
+| Observability | OpenTelemetry + log terpusat |
+
+---
+
+# BAGIAN 3 — FASE PEMBANGUNAN LENGKAP
+
+## Phase 0 — Foundation (Legal + Infra Baseline)
+**Durasi indikatif:** 1-2 bulan
+**Tim minimal:** 1 backend lead, 1 DevOps/infra, 1 legal/compliance advisor (part-time/konsultan)
+
+Deliverable teknis:
+- Setup repo, CI/CD, environment (dev/staging/production terpisah).
+- Setup PostgreSQL + TimescaleDB, Redis, secret vault dasar.
+- Skema database inti (users, tenants, connectors, manual_assets).
+- Auth Service dasar (email/password + JWT), belum perlu OAuth2 developer.
+- Kepatuhan dasar: draft ToS/Privacy Policy sesuai UU PDP, consent flow saat registrasi.
+
+**Exit criteria:** sistem auth berjalan, database migration terversi, pipeline deploy otomatis, dokumen legal dasar selesai direview.
+
+---
+
+## Phase 1 — MVP Core
+**Durasi indikatif:** 2-3 bulan setelah Phase 0
+**Tim minimal:** 2 backend, 1 frontend, 1 QA (bisa merangkap)
+
+Deliverable teknis:
+- Connector live: Binance + 1 wallet (mis. MetaMask via wallet address read-only).
+- Manual Asset Engine: kategori Saham IDX + Emas Digital (sesuai prioritas di section sebelumnya).
+- Price Intelligence Service: 1 provider primer + 1 fallback per kategori aktif.
+- Portfolio Engine dasar: total net worth, breakdown per kategori, unrealized P/L.
+- Dashboard web dasar (tanpa billing dulu — semua user dianggap Free di fase ini).
+- Notification: email saja (channel lain menyusul).
+
+**Exit criteria:** user bisa hubungkan 1 exchange + input manual saham/emas, melihat portofolio gabungan akurat, retensi mingguan terukur sebelum lanjut fase berikut.
+
+---
+
+## Phase 2 — Developer Platform + Billing/Subscription
+**Durasi indikatif:** 2-3 bulan setelah Phase 1
+**Tim minimal:** 2 backend, 1 frontend, 1 product/design untuk halaman langganan
+
+Ini fase di mana **halaman langganan per-user dibangun** (detail lengkap di Bagian 4). Deliverable teknis:
+- Billing/Subscription Service: model plan, kuota, integrasi payment gateway (Midtrans/Xendit).
+- Halaman Langganan (frontend): pemilihan plan, upgrade/downgrade, invoice history.
+- Usage metering: penghitungan pemakaian real (jumlah connector aktif, jumlah manual asset, API call jika sudah buka Public API).
+- Public API v1 dibuka terbatas (scoped API key, sandbox environment) + dokumentasi developer.
+- Webhook dasar untuk event portfolio (update harga signifikan, sync gagal).
+
+**Exit criteria:** minimal 1 pengguna riil upgrade dari Free ke paket berbayar, billing cycle berjalan penuh (charge → invoice → renewal) tanpa intervensi manual.
+
+---
+
+## Phase 3 — Ekspansi Kategori Aset + Risk Ringan
+**Durasi indikatif:** 3-4 bulan
+**Tim minimal:** tim Phase 2 + 1 backend tambahan untuk kategori baru
+
+Deliverable teknis:
+- Manual Asset Engine diperluas: Reksa Dana (perlu perjanjian data NAB), Emas Fisik.
+- Exchange crypto tambahan (2-3 exchange berikutnya berdasarkan permintaan user, bukan target angka besar).
+- Risk Engine versi ringan: hanya Concentration Risk & Allocation breakdown — bukan seluruh daftar metrik dari PRD lama.
+- Notifikasi tambahan: push (webhook sudah ada dari Phase 2).
+
+**Exit criteria:** komposisi user aktif menunjukkan pemakaian nyata kategori baru (bukan hanya tersedia tapi tidak dipakai).
+
+---
+
+## Phase 4 — Developer Marketplace + Skala
+**Durasi indikatif:** 4-6 bulan, dimulai setelah revenue B2B awal tervalidasi
+**Tim minimal:** tim khusus platform/marketplace + security reviewer
+
+Deliverable teknis:
+- SDK publik + program submit connector pihak ketiga.
+- Sandbox eksekusi connector pihak ketiga (container terisolasi, sesuai Bagian 1.5).
+- Agent-readiness: expose API dalam bentuk yang kompatibel dengan akses AI agent (scoped, consent-based).
+- Paket Business (SLA, multi-user workspace penuh, audit log ekspor) — dibangun setelah ada calon pelanggan nyata, bukan sebelumnya.
+
+**Exit criteria:** minimal 1 connector pihak ketiga live dari luar tim internal.
+
+---
+
+# BAGIAN 4 — SUBSCRIPTION TIERS & HALAMAN LANGGANAN
+
+## 4.1 Identifikasi Paket Layanan
+
+| Paket | Target User | Batasan Utama | Fitur |
+|---|---|---|---|
+| **Free** | Individu, coba-coba | 1 connector live + 5 manual asset, sync delayed standar, tanpa API access | Portfolio dashboard dasar, 1 kanal notifikasi (email) |
+| **Starter** | Individu aktif/trader retail | 3 connector live + 25 manual asset, sync lebih sering | + Push notification, riwayat portofolio 90 hari |
+| **Pro** | Power user, investor multi-aset | Connector & manual asset unlimited*, akses Public API (kuota terbatas) | + Webhook, riwayat unlimited, export data, dukungan prioritas |
+| **Business** *(dibangun setelah ada demand nyata — lihat Phase 4)* | Tim kecil/organisasi | Multi-user workspace, kuota API lebih besar | + RBAC, audit log, SLA dasar |
+
+\*"Unlimited" dalam praktik tetap dibatasi *fair use* teknis (mis. rate limit wajar) untuk mencegah abuse — bukan literal tanpa batas di level infrastruktur.
+
+Catatan: paket "Enterprise" dengan SLA khusus/deployment khusus **sengaja tidak didaftarkan sebagai paket publik** sesuai keputusan sebelumnya — hanya dibuka by-request setelah ada pelanggan nyata yang memintanya.
+
+## 4.2 Struktur Halaman Langganan (Frontend)
+
+**Halaman: `/settings/billing`**
+
+1. **Ringkasan Plan Aktif** — nama plan, tanggal renewal berikutnya, tombol "Ubah Plan".
+2. **Indikator Pemakaian** (usage meter, real-time dari `usage_meters` table) — mis. "2/3 connector terpakai", "18/25 manual asset" — dengan progress bar, supaya user sadar sebelum kena limit, bukan dikejutkan saat mentok.
+3. **Tabel Perbandingan Plan** — Free/Starter/Pro/Business side-by-side, tombol upgrade langsung per kolom.
+4. **Riwayat Invoice** — daftar transaksi, status (paid/pending/failed), link download invoice PDF.
+5. **Metode Pembayaran** — kelola kartu/metode via payment gateway (tokenized, tidak ada data kartu tersimpan di server Joben sendiri — PCI compliance didelegasikan ke Midtrans/Xendit).
+
+## 4.3 Alur Upgrade/Downgrade
+
+```
+User klik "Upgrade ke Pro"
+      |
+Frontend panggil Billing Service -> buat payment session di gateway
+      |
+User selesaikan pembayaran di gateway
+      |
+Gateway kirim webhook konfirmasi -> Billing Service update subscriptions.status
+      |
+Billing Service publish event "plan_changed" ke queue
+      |
+Semua service relevan (Connector Service, Manual Asset Engine) baca event ini
+untuk menyesuaikan limit kuota secara real-time - tanpa perlu restart/manual sync
+```
+
+- **Downgrade**: berlaku di akhir periode billing berjalan (bukan langsung), dan sistem memberi peringatan eksplisit jika downgrade akan melebihi batas kuota plan baru (mis. user Pro dengan 10 connector turun ke Starter yang cuma 3) — user diminta memilih connector mana yang tetap aktif sebelum downgrade dieksekusi, bukan sistem menghapus otomatis.
+
+## 4.4 Model Data Billing
+
+```sql
+plans (id, name, price, connector_limit, manual_asset_limit, api_quota, features_json)
+subscriptions (id, tenant_id, plan_id, status, current_period_start, current_period_end, payment_method_ref)
+usage_meters (id, tenant_id, metric_name, current_value, period_start, period_end)
+invoices (id, subscription_id, amount, status, issued_at, pdf_ref)
+```
+
+## 4.5 Enforcement Kuota
+
+- Enforcement kuota terjadi di **API Gateway layer** (bukan di masing-masing service) — satu titik pemeriksaan konsisten, supaya tidak ada celah antar service yang lupa cek limit.
+- Saat user mendekati limit (≥80% kuota), sistem kirim notifikasi proaktif "Anda mendekati batas plan Anda" — mendorong upgrade secara natural, bukan memblokir mendadak.

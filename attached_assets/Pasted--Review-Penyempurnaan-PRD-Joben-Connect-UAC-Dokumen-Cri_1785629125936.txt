@@ -1,0 +1,114 @@
+# Review & Penyempurnaan PRD: Joben Connect (UAC)
+**Dokumen:** Critique + Rewrite Proposal
+**Terhadap:** PRD-001 Joben Connect v1.0
+**Tujuan:** Membuat platform ini benar-benar *buildable*, *fundable*, dan bertahan 10 tahun+
+
+---
+
+## 1. Ringkasan Penilaian
+
+PRD ini kuat di **visi dan taksonomi produk** — struktur connector, UDS (Universal Data Standard), dan pemisahan arsitektur dari JobenApp sudah tepat secara konseptual (ini persis pola Plaid, Yodlee, Teller, MX, atau Zerion/DeBank untuk crypto). Tapi PRD ini masih berupa **wishlist fitur**, bukan rencana produk yang bisa dieksekusi. Ia hilang di lima area yang justru paling menentukan hidup-matinya platform seperti ini: **regulasi, keandalan konektor, model bisnis riil, organisasi/sumber daya, dan strategi jangka panjang untuk skala tanpa membangun semuanya sendiri**.
+
+Sebagai perbandingan: Plaid butuh ~8 tahun dan ratusan juta USD funding untuk mencapai ~12.000 institusi (bukan 100 juta konektor). Target di PRD ini ("500 blockchain", "100 exchange", "50 broker", "10 miliar+ asset record", "50.000 req/detik") ditulis tanpa fase yang realistis dan tanpa kaitan dengan tim/dana yang dibutuhkan — ini akan langsung dianggap tidak kredibel oleh investor atau engineering lead mana pun yang membaca PRD ini.
+
+---
+
+## 2. Kelemahan Kritis (per kategori)
+
+### A. Regulasi & Legal — **paling kritis, dan sama sekali tidak ada di PRD**
+- Tidak ada pembahasan **UU PDP (Perlindungan Data Pribadi)** — padahal produk ini secara inti mengakses, menyimpan, dan memproses data finansial pribadi dari jutaan pengguna.
+- Tidak ada pembahasan status **OJK** untuk agregator data finansial. "Never hold money" tidak otomatis berarti tidak diregulasi — di banyak negara, *account aggregator* tetap butuh izin (India punya lisensi "Account Aggregator" resmi dari RBI; Eropa punya PSD2/AISP license; Indonesia sedang mengembangkan **SNAP - Standar Nasional Open API Pembayaran** dari BI).
+- Tidak menyinggung apakah scraping/otentikasi non-resmi ke broker/bank (screen scraping, credential sharing) itu **legal** — ini sering jadi celah hukum besar, dan justru disinggung sendiri di PRD ("jika tersedia API resmi") tanpa strategi untuk kasus API resmi tidak tersedia.
+- Tidak ada data residency/data sovereignty plan — data finansial WNI kemungkinan wajib disimpan di server lokal Indonesia.
+- Tidak ada Terms of Service / liability framework: jika data yang ditampilkan salah dan user rugi karena keputusan finansial, siapa yang bertanggung jawab?
+
+### B. Keandalan Konektor — inti bisnis ini justru paling rapuh, tidak dibahas
+- Tidak ada strategi ketika sebuah exchange/wallet **mengubah API mereka** (ini terjadi rutin — connector break adalah risiko operasional #1 di bisnis seperti ini).
+- Tidak ada **SLA per connector**, tidak ada connector health monitoring/dashboard, tidak ada kebijakan deprecation.
+- Tidak ada rencana untuk broker/exchange **tanpa API resmi** — realitanya, sebagian besar target Category A (broker saham Indonesia) tidak punya API publik sama sekali hari ini.
+- Tidak ada strategi *graceful degradation* — apa yang user lihat saat satu connector gagal sync (data stale vs error vs silent fail)?
+
+### C. Model Bisnis & Realisme Angka
+- Target skala (100.000+ tenant, 10 juta+ user, 500 blockchain, dst) ditulis sebagai deklarasi, bukan hasil analisis kapasitas tim/dana.
+- Tidak ada unit economics: biaya per connector call, biaya menjaga 500 blockchain node/RPC tetap sinkron, biaya lisensi price data provider (Chainlink, CoinGecko Pro, dll bukan gratis di skala besar).
+- Tidak ada analisis kompetitor (Plaid, Yodlee/Envestnet, Zerion, DeBank, Zapper, Koinly, CoinStats, Basket, Kubera) — tanpa ini, tidak jelas kenapa Joben Connect menang.
+- Paket harga (Free/Developer/Startup/Business/Enterprise) disebut tanpa angka atau batas kuota konkret — belum bisa dipakai untuk pitching atau engineering planning.
+
+### D. Organisasi & Eksekusi
+- Tidak ada rencana tim: connector engineering saja butuh tim khusus per kategori (crypto, broker, bank, DeFi) karena masing-masing punya kompleksitas integrasi yang sangat berbeda.
+- Tidak ada strategi build-vs-partner: membangun 500 blockchain connector in-house tidak realistis — solusi industri nyata adalah **partner dengan agregator on-chain** (contoh: Covalent/GoldRush, Moralis, Zerion API) untuk data blockchain, lalu fokus tim internal ke connector yang jadi diferensiasi (broker & bank lokal Indonesia/SEA).
+
+### E. Ketahanan 10 Tahun
+- Tidak ada **SDK/marketplace untuk pihak ketiga membangun connector sendiri** — ini satu-satunya cara realistis mencapai skala "100 juta connector" tanpa tim internal 10.000 orang. Marketplace connector (seperti Zapier App Directory atau Plaid's partner network) harus jadi pilar utama, bukan poin roadmap Phase 4.
+- Tidak ada strategi kesiapan terhadap **AI agent access** — tren 2025-2026 menuju agent (LLM) yang mengakses data finansial pengguna secara langsung lewat protokol seperti MCP. Platform yang bertahan 10 tahun harus punya *agent-readiness* dari desain awal, bukan ditambah belakangan.
+- Tidak ada rencana versioning API jangka panjang (v1 → v2 → deprecation policy) — krusial untuk B2B API yang dipakai developer eksternal.
+- Tidak ada exit/redundancy plan jika satu provider data harga (misal CoinGecko) berhenti beroperasi atau menaikkan harga drastis.
+
+### F. Keamanan — sudah cukup baik tapi generik
+- List keamanan (Zero Trust, AES-256, TLS 1.3, dst) benar tapi hanya checklist, bukan strategi. Tidak ada threat model spesifik untuk kasus paling sensitif: **penyimpanan API key/secret milik user ke exchange/broker mereka** — ini target serangan utama untuk platform seperti ini (bandingkan: insiden pencurian API key agregator crypto sudah beberapa kali terjadi di industri).
+- Tidak ada rencana audit keamanan independen (pentest berkala, SOC 2, ISO 27001) — wajib untuk B2B enterprise sales.
+- Tidak ada incident response plan / bug bounty program.
+
+---
+
+## 3. Penyempurnaan — Bagian Baru yang Perlu Ditambahkan
+
+### 3.1 Compliance & Legal Framework (bagian baru, taruh setelah Section 2)
+- Kepatuhan UU PDP: consent management per data category, retention policy, right-to-delete, data processing agreement dengan setiap connector partner.
+- Kajian kebutuhan lisensi *account aggregator* / kerja sama dengan bank melalui **SNAP (BI)** untuk koneksi rekening bank resmi.
+- Kebijakan tegas: connector yang butuh scraping/credential sharing non-resmi masuk kategori "Community/Unverified Connector" dengan disclaimer eksplisit ke user — dipisah dari connector resmi berlisensi.
+- Data residency: data pengguna Indonesia disimpan di infrastruktur lokal (align dengan aturan PP 71/2019 dan turunan UU PDP).
+
+### 3.2 Connector Reliability Framework (bagian baru)
+- Tiering connector: **Tier 1 (Official API, SLA 99.9%)**, **Tier 2 (Official API, SLA 99%)**, **Tier 3 (Community-maintained, best-effort)**.
+- Connector Health Dashboard publik (seperti status page Plaid) — transparansi ke developer & user.
+- Automated contract testing per connector (deteksi otomatis saat API pihak ketiga berubah, sebelum user melapor).
+- Kebijakan deprecation: minimum 90 hari notice sebelum connector dimatikan.
+
+### 3.3 Build vs Partner Strategy (bagian baru — krusial untuk realisme)
+- **Bangun in-house**: connector broker & bank lokal Indonesia/SEA (di sinilah diferensiasi nyata dan tidak ada pemain global yang fokus).
+- **Partner/lisensi**: data blockchain multi-chain (via provider seperti Covalent/GoldRush, Moralis) dan data harga (via agregator harga multi-sumber) — jangan bangun 500 node blockchain sendiri.
+- Ini mengubah roadmap dari "bangun semuanya" menjadi "bangun yang membedakan, partner untuk yang commoditized".
+
+### 3.4 Developer & Connector Marketplace (naikkan dari Phase 4 ke fondasi Phase 2)
+- SDK publik untuk pihak ketiga membangun & submit connector sendiri (seperti Zapier Developer Platform).
+- Program sertifikasi & review keamanan connector sebelum listed publik.
+- Revenue share untuk connector developer pihak ketiga — insentif ekosistem tumbuh tanpa beban penuh di tim internal.
+- Ini satu-satunya jalur realistis menuju skala "100 juta connector" yang disebut di target awal.
+
+### 3.5 AI & Agent Readiness (bagian baru, penting untuk 10 tahun ke depan)
+- Desain API agar kompatibel dengan protokol akses agent (mis. MCP-style tool interface), bukan hanya REST/GraphQL untuk developer manusia.
+- Structured, permission-scoped read access yang bisa dipakai AI assistant pengguna (dengan consent eksplisit & scoped token, bukan full access).
+- Ini penting karena dalam 5-10 tahun, sebagian besar konsumsi data finansial personal kemungkinan besar terjadi lewat AI agent, bukan UI langsung.
+
+### 3.6 Roadmap yang Direvisi (lebih realistis, berbasis kapasitas tim)
+
+| Fase | Fokus | Syarat Sebelum Lanjut |
+|---|---|---|
+| **Phase 0 (baru)** | Legal foundation: UU PDP compliance, ToS, data residency, security baseline (pentest awal) | Sebelum akuisisi user pertama |
+| **Phase 1 (MVP)** | 3-5 connector Tier 1 (Binance, Indodax, Phantom, MetaMask, manual asset), UDS, Portfolio Engine dasar | Validasi retensi user & akurasi data |
+| **Phase 2** | Buka Developer Platform + connector marketplace (bukan hanya nambah connector internal), 15-20 exchange, price engine multi-provider, webhook | Minimal 1 partner eksternal aktif pakai API |
+| **Phase 3** | Connector broker/bank lokal (fokus diferensiasi, kerja sama resmi via SNAP jika tersedia), DeFi via partner data, Risk Engine | Kepatuhan regulasi untuk data finansial teregulasi selesai |
+| **Phase 4** | Skala ekosistem: agent-readiness (MCP-style access), alternative assets, connector marketplace matang, enterprise SLA & SOC2 | Basis B2B revenue tervalidasi |
+
+---
+
+## 4. Ide Tambahan agar Bertahan 10 Tahun
+
+1. **Prinsip "Diferensiasi = lokal, komoditas = partner".** Jangan bersaing membangun infrastruktur data blockchain/harga global — itu sudah jadi komoditas yang dikuasai pemain besar. Menangkan justru di broker/bank/aset lokal Indonesia-SEA yang tidak diprioritaskan pemain global.
+2. **Transparansi sebagai fitur, bukan sekadar keamanan.** Connector Health Dashboard publik membangun kepercayaan developer B2B — ini yang bikin Plaid dipercaya bank-bank besar.
+3. **Consent-first architecture.** Bangun sistem izin granular per data-category (bukan on/off per connector) sejak awal — akan jauh lebih mahal ditambahkan belakangan setelah regulasi data pribadi makin ketat di ASEAN.
+4. **Jangan hanya "Never Hold Money" — punya "Never Trust Blindly".** Setiap data yang masuk dari connector pihak ketiga harus melalui *anomaly detection* sebelum ditampilkan sebagai net worth pengguna — kesalahan data finansial merusak kepercayaan permanen.
+5. **Rencana keberlanjutan provider pihak ketiga.** Untuk setiap data eksternal kritis (harga, blockchain data), selalu punya minimal 2 provider fallback — jangan single point of failure secara bisnis.
+6. **Ukur "Assets Under Aggregation" (AUA), bukan AUM**, sebagai metrik utama — konsisten dengan positioning "never hold money" dan lebih jujur ke investor/regulator.
+7. **Siapkan jalur menjadi infrastruktur, bukan hanya app-enabler.** Jika Joben Connect sukses, produk lain (wealth management, tax app, keluarga) akan datang dengan sendirinya — tapi hanya jika API-nya cukup stabil dan terdokumentasi untuk dipercaya pihak ketiga di luar Joben sendiri.
+
+---
+
+## 5. Prioritas Tindakan Segera
+
+1. Tambahkan Section "Compliance & Legal Framework" — ini blocker hukum, bukan nice-to-have.
+2. Revisi semua angka target di Section 22 menjadi target per-fase yang dikaitkan dengan kapasitas tim (atau hapus dulu sampai ada rencana hiring/funding).
+3. Pindahkan "Connector Marketplace/SDK" dari Phase 4 ke fondasi Phase 2 — ini jalur realistis satu-satunya menuju skala besar.
+4. Tambahkan strategi build-vs-partner eksplisit per kategori connector.
+5. Tambahkan bagian keandalan connector (tiering, SLA, health dashboard) — ini yang paling menentukan apakah B2B customer mau bergantung ke platform ini.
