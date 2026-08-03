@@ -117,4 +117,35 @@ export const HTTP_MESSAGES = {
 export const SERVICE_PORTS = {
   API_GATEWAY: 3000,
   AUTH_SERVICE: 3001,
+  PORTFOLIO_SERVICE: 3002,
+} as const;
+
+// ── Supported Connector Catalog ─────────────────────────────
+export const SUPPORTED_CONNECTORS = {
+  binance: {
+    displayName: 'Binance',
+    tier: 'TIER_1' as const,
+    description: 'Exchange kripto terbesar secara global',
+    requiredFields: ['apiKey', 'apiSecret'] as const,
+  },
+  bybit: {
+    displayName: 'Bybit',
+    tier: 'TIER_1' as const,
+    description: 'Exchange kripto populer di Indonesia',
+    requiredFields: ['apiKey', 'apiSecret'] as const,
+  },
+  indodax: {
+    displayName: 'Indodax',
+    tier: 'TIER_1' as const,
+    description: 'Exchange kripto terbesar di Indonesia',
+    requiredFields: ['apiKey', 'apiSecret'] as const,
+  },
+} as const;
+
+// ── Price Cache TTL (ms) ─────────────────────────────────────
+export const PRICE_CACHE_TTL_MS = {
+  CRYPTO: 5 * 60 * 1000,
+  STOCKS: 60 * 60 * 1000,
+  GOLD: 60 * 60 * 1000,
+  CURRENCY: 30 * 60 * 1000,
 } as const;

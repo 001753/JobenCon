@@ -143,6 +143,28 @@ model Tenant {
 }
 
 // ============================================================
+// CREDENTIAL VAULT
+// Phase 1: AES-256-GCM in-process encryption.
+// Phase 2+: migrasi ke HashiCorp Vault / AWS KMS.
+// ============================================================
+
+model CredentialVault {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @db.Uuid @map("user_id")
+  /// AES-256-GCM encrypted JSON (ConnectorCredentials)
+  encryptedData Bytes    @map("encrypted_data")
+  /// Base64 96-bit IV
+  iv            String   @db.VarChar(32) @map("iv")
+  /// Base64 128-bit GCM auth tag
+  tag           String   @db.VarChar(32) @map("tag")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([userId])
+  @@map("credential_vault")
+}
+
+// ============================================================
 // CONNECTORS
 // ============================================================
 

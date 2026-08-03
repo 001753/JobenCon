@@ -7,6 +7,7 @@ import { errorHandler } from './plugins/error-handler.js';
 import { authPlugin } from './plugins/auth.plugin.js';
 import { healthRoutes } from './routes/health.routes.js';
 import { authProxyRoutes } from './routes/auth-proxy.routes.js';
+import { portfolioProxyRoutes } from './routes/portfolio-proxy.routes.js';
 
 export async function buildApp() {
   const app = Fastify({
@@ -95,10 +96,8 @@ export async function buildApp() {
   // Auth routes — proxy ke auth-service
   await app.register(authProxyRoutes, { prefix: '/v1/auth' });
 
-  // TODO Phase 1: register routes untuk portfolio, connectors, manual-assets
-  // await app.register(portfolioRoutes, { prefix: '/v1/portfolio' });
-  // await app.register(connectorRoutes, { prefix: '/v1/connectors' });
-  // await app.register(manualAssetRoutes, { prefix: '/v1/assets' });
+  // Phase 1: portfolio, connectors, assets, wallet, prices, me — proxy ke portfolio-service
+  await app.register(portfolioProxyRoutes, { prefix: '/v1' });
 
   return app;
 }

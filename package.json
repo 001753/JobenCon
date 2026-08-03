@@ -16,6 +16,7 @@
     "dev": "pnpm -r --parallel dev",
     "dev:auth": "pnpm --filter @jobencon/auth-service dev",
     "dev:gateway": "pnpm --filter @jobencon/api-gateway dev",
+    "dev:portfolio": "pnpm --filter @jobencon/portfolio-service dev",
     "test": "pnpm -r test",
     "test:ci": "pnpm -r test -- --ci --coverage",
     "lint": "eslint packages --ext .ts,.tsx --max-warnings 0",

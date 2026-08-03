@@ -37,6 +37,10 @@ args = "API Gateway"
 task = "workflow.run"
 args = "Auth Service"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Portfolio Service"
+
 [[workflows.workflow]]
 name = "API Gateway"
 author = "agent"
@@ -54,6 +58,18 @@ author = "agent"
 task = "shell.exec"
 args = "pnpm dev:auth"
 waitForPort = 3001
+
+[[workflows.workflow]]
+name = "Portfolio Service"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm dev:portfolio"
+waitForPort = 3002
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[ports]]
 localPort = 3000
