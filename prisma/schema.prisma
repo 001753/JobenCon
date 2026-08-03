@@ -1,0 +1,525 @@
+// ============================================================
+// JOBEN CONNECT — Prisma Schema
+// Phase 0 baseline — sesuai PRD Section 7.2
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Email disimpan ter-encrypt (pgcrypto AES). Gunakan emailHash untuk lookup.
+  email             Bytes     @unique
+  /// SHA-256 dari lowercase email — untuk lookup tanpa decrypt
+  emailHash         String    @unique @db.VarChar(64) @map("email_hash")
+  name              String?   @db.VarChar(100)
+  passwordHash      String    @db.VarChar(255) @map("password_hash")
+  isEmailVerified   Boolean   @default(false) @map("is_email_verified")
+  mfaEnabled        Boolean   @default(false) @map("mfa_enabled")
+  /// Reference ke vault entry — bukan secret-nya langsung
+  mfaSecretRef      String?   @db.Uuid @map("mfa_secret_ref")
+  /// active | suspended | deleted
+  status            UserStatus @default(active)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  lastLoginAt       DateTime? @map("last_login_at") @db.Timestamptz
+
+  // Relations
+  emailVerifications EmailVerification[]
+  sessions           Session[]
+  mfaRecoveryCodes   MfaRecoveryCode[]
+  consentLogs        ConsentLog[]
+  tenants            Tenant[]
+  connectors         Connector[]
+  connectorHoldings  ConnectorHolding[]
+  manualAssets       ManualAsset[]
+  currencyHoldings   CurrencyHolding[]
+  portfolioSnapshots PortfolioSnapshot[]
+  subscriptions      Subscription[]
+  invoices           Invoice[]
+  usageMeters        UsageMeter[]
+  oauthClients       OauthClient[]
+  apiKeys            ApiKey[]
+
+  @@map("users")
+}
+
+enum UserStatus {
+  active
+  suspended
+  deleted
+
+  @@map("user_status")
+}
+
+model EmailVerification {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @db.Uuid @map("user_id")
+  /// SHA-256 dari raw token — raw token dikirim via email
+  tokenHash String    @db.VarChar(64) @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("email_verifications")
+}
+
+model Session {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String    @db.Uuid @map("user_id")
+  /// SHA-256 dari raw refresh token
+  refreshTokenHash   String    @db.VarChar(64) @map("refresh_token_hash")
+  deviceFingerprint  String?   @db.VarChar(255) @map("device_fingerprint")
+  ipAddress          String?   @map("ip_address")
+  userAgent          String?   @map("user_agent")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  lastUsedAt         DateTime  @default(now()) @map("last_used_at") @db.Timestamptz
+  expiresAt          DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt          DateTime? @map("revoked_at") @db.Timestamptz
+
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+  @@map("sessions")
+}
+
+model MfaRecoveryCode {
+  id       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId   String    @db.Uuid @map("user_id")
+  /// SHA-256 dari raw recovery code
+  codeHash String    @db.VarChar(64) @map("code_hash")
+  usedAt   DateTime? @map("used_at") @db.Timestamptz
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("mfa_recovery_codes")
+}
+
+model ConsentLog {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @db.Uuid @map("user_id")
+  /// analytics | marketing | data_sharing | dll
+  consentType   String   @db.VarChar(100) @map("consent_type")
+  granted       Boolean
+  policyVersion String   @db.VarChar(20) @map("policy_version")
+  ipAddress     String?  @map("ip_address")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("consent_log")
+}
+
+// ============================================================
+// TENANT & WORKSPACE (Phase 4 multi-user)
+// Phase 1: setiap user otomatis punya 1 personal tenant
+// ============================================================
+
+model Tenant {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @db.VarChar(200)
+  ownerId   String   @db.Uuid @map("owner_id")
+  planId    String?  @db.Uuid @map("plan_id")
+  /// active | suspended
+  status    String   @default("active") @db.VarChar(20)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  owner     User     @relation(fields: [ownerId], references: [id])
+  plan      Plan?    @relation(fields: [planId], references: [id])
+
+  @@map("tenants")
+}
+
+// ============================================================
+// CONNECTORS
+// ============================================================
+
+model Connector {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String          @db.Uuid @map("user_id")
+  /// binance | bybit | indodax | dll
+  connectorType    String          @db.VarChar(50) @map("connector_type")
+  /// TIER_1 | TIER_2 | TIER_3 | COMMUNITY
+  connectorTier    String          @db.VarChar(20) @map("connector_tier")
+  /// OFFICIAL_API | PARTNERSHIP | COMMUNITY | DEPRECATED
+  connectorClass   String          @db.VarChar(20) @map("connector_class")
+  /// Reference ke vault entry — bukan API key-nya langsung
+  credentialRef    String          @db.Uuid @map("credential_ref")
+  /// active | error | paused | revoked
+  status           ConnectorStatus @default(active)
+  lastSyncAt       DateTime?       @map("last_sync_at") @db.Timestamptz
+  /// success | partial | failed
+  lastSyncStatus   String?         @db.VarChar(20) @map("last_sync_status")
+  lastSyncError    String?         @map("last_sync_error")
+  syncIntervalSec  Int             @default(300) @map("sync_interval_sec")
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  user             User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holdings         ConnectorHolding[]
+  syncLogs         SyncLog[]
+
+  @@unique([userId, connectorType])
+  @@map("connectors")
+}
+
+enum ConnectorStatus {
+  active
+  error
+  paused
+  revoked
+
+  @@map("connector_status")
+}
+
+model ConnectorHolding {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectorId     String    @db.Uuid @map("connector_id")
+  userId          String    @db.Uuid @map("user_id")
+  /// BTC | ETH | BBCA | dll
+  assetIdentifier String    @db.VarChar(50) @map("asset_identifier")
+  /// CRYPTO | STOCKS | GOLD | CURRENCY | MUTUAL_FUND
+  assetCategory   String    @db.VarChar(50) @map("asset_category")
+  quantity        Decimal   @db.Decimal(30, 18)
+  /// null jika tidak tersedia dari exchange
+  avgBuyPrice     Decimal?  @db.Decimal(30, 8) @map("avg_buy_price")
+  /// IDR | USDT | USD | dll
+  avgBuyCurrency  String?   @db.Char(3) @map("avg_buy_currency")
+  syncedAt        DateTime  @map("synced_at") @db.Timestamptz
+  /// Data asli dari exchange sebelum normalisasi ke UDS
+  rawData         Json?     @map("raw_data")
+
+  connector       Connector @relation(fields: [connectorId], references: [id], onDelete: Cascade)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, assetCategory])
+  @@index([connectorId, assetIdentifier])
+  @@map("connector_holdings")
+}
+
+model SyncLog {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  connectorId  String    @db.Uuid @map("connector_id")
+  startedAt    DateTime  @map("started_at") @db.Timestamptz
+  completedAt  DateTime? @map("completed_at") @db.Timestamptz
+  /// success | partial | failed
+  status       String    @db.VarChar(20)
+  assetsSynced Int       @default(0) @map("assets_synced")
+  errorCode    String?   @db.VarChar(50) @map("error_code")
+  errorMessage String?   @map("error_message")
+  durationMs   Int?      @map("duration_ms")
+
+  connector    Connector @relation(fields: [connectorId], references: [id])
+
+  @@index([connectorId, startedAt])
+  @@map("sync_log")
+}
+
+// ============================================================
+// MANUAL ASSETS
+// ============================================================
+
+model ManualAsset {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String   @db.Uuid @map("user_id")
+  /// CRYPTO | STOCKS | GOLD | CURRENCY | MUTUAL_FUND | OTHER
+  category             String   @db.VarChar(50)
+  /// EMAS | BBCA | BTC | dll — null untuk kategori OTHER
+  assetIdentifier      String?  @db.VarChar(50) @map("asset_identifier")
+  /// Nama custom user untuk aset ini
+  label                String?  @db.VarChar(200)
+  quantity             Decimal  @db.Decimal(30, 18)
+  /// gram | lot | lembar | unit | dll
+  unit                 String?  @db.VarChar(20)
+  avgBuyPrice          Decimal? @db.Decimal(30, 8) @map("avg_buy_price")
+  avgBuyPriceCurrency  String   @default("IDR") @db.Char(3) @map("avg_buy_price_currency")
+  notes                String?
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, category])
+  @@map("manual_assets")
+}
+
+// ============================================================
+// CURRENCY WALLET
+// ============================================================
+
+model CurrencyHolding {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @db.Uuid @map("user_id")
+  /// ISO 4217: IDR | USD | SGD | dll
+  currencyCode String   @db.Char(3) @map("currency_code")
+  amount       Decimal  @db.Decimal(20, 8)
+  /// Nama akun/wallet (opsional)
+  label        String?  @db.VarChar(100)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, currencyCode, label])
+  @@map("currency_holdings")
+}
+
+// ============================================================
+// PRICE DATA (TimescaleDB hypertable — lihat prisma/sql/timescaledb_init.sql)
+// ============================================================
+
+model PriceSnapshot {
+  ts              DateTime @db.Timestamptz
+  assetIdentifier String   @db.VarChar(50) @map("asset_identifier")
+  /// CRYPTO | STOCKS | GOLD | CURRENCY | MUTUAL_FUND
+  assetCategory   String   @db.VarChar(50) @map("asset_category")
+  /// null jika tidak ada konversi langsung ke IDR
+  priceIdr        Decimal? @db.Decimal(30, 8) @map("price_idr")
+  priceUsd        Decimal? @db.Decimal(30, 8) @map("price_usd")
+  /// Native currency dari harga
+  priceCurrency   String   @db.Char(3) @map("price_currency")
+  priceNative     Decimal  @db.Decimal(30, 8) @map("price_native")
+  /// coingecko | rti | bi | antam | dll
+  source          String   @db.VarChar(50)
+  /// 0=real-time, 15=delayed 15 menit
+  delayMinutes    Int      @default(0) @map("delay_minutes")
+
+  @@id([ts, assetIdentifier, assetCategory])
+  @@index([assetIdentifier, assetCategory, ts(sort: Desc)], name: "idx_price_snapshots_lookup")
+  @@map("price_snapshots")
+}
+
+// ============================================================
+// PORTFOLIO
+// ============================================================
+
+model PortfolioSnapshot {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String   @db.Uuid @map("user_id")
+  computedAt         DateTime @map("computed_at") @db.Timestamptz
+  totalNetWorthIdr   Decimal? @db.Decimal(30, 8) @map("total_net_worth_idr")
+  totalNetWorthUsd   Decimal? @db.Decimal(30, 8) @map("total_net_worth_usd")
+  unrealizedPlIdr    Decimal? @db.Decimal(30, 8) @map("unrealized_pl_idr")
+  unrealizedPlPct    Decimal? @db.Decimal(10, 4) @map("unrealized_pl_pct")
+  /// {"CRYPTO": amount_idr, "STOCKS": amount_idr, ...}
+  breakdownByCategory Json?  @map("breakdown_by_category")
+  /// 0–100: persentase aset yang datanya fresh
+  dataQualityScore   Decimal? @db.Decimal(5, 2) @map("data_quality_score")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, computedAt(sort: Desc)], name: "idx_portfolio_snapshots_user_time")
+  @@map("portfolio_snapshots")
+}
+
+// ============================================================
+// SUBSCRIPTION & BILLING
+// ============================================================
+
+model Plan {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// free | starter | pro | business
+  name                String   @unique @db.VarChar(50)
+  displayName         String   @db.VarChar(100) @map("display_name")
+  priceMonthlyIdr     Decimal  @default(0) @db.Decimal(15, 2) @map("price_monthly_idr")
+  priceYearlyIdr      Decimal  @default(0) @db.Decimal(15, 2) @map("price_yearly_idr")
+  isActive            Boolean  @default(true) @map("is_active")
+  sortOrder           Int      @default(0) @map("sort_order")
+
+  // Limits (null = unlimited)
+  maxConnectors       Int?     @map("max_connectors")
+  maxManualAssets     Int?     @map("max_manual_assets")
+  apiQuotaHourly      Int?     @map("api_quota_hourly")
+  apiQuotaDaily       Int?     @map("api_quota_daily")
+  portfolioHistoryDays Int?    @map("portfolio_history_days")
+
+  /// Feature flags: {"webhook": true, "data_export": true, ...}
+  features            Json     @default("{}")
+
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  subscriptions       Subscription[]
+  tenants             Tenant[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId               String             @db.Uuid @map("user_id")
+  planId               String             @db.Uuid @map("plan_id")
+  /// active | past_due | cancelled | trial
+  status               SubscriptionStatus
+  currentPeriodStart   DateTime           @map("current_period_start") @db.Timestamptz
+  currentPeriodEnd     DateTime           @map("current_period_end") @db.Timestamptz
+  cancelAtPeriodEnd    Boolean            @default(false) @map("cancel_at_period_end")
+  /// Tokenized payment method dari gateway
+  paymentMethodRef     String?            @db.VarChar(255) @map("payment_method_ref")
+  /// ID di Midtrans/Xendit
+  gatewaySubscriptionId String?           @db.VarChar(255) @map("gateway_subscription_id")
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 Plan               @relation(fields: [planId], references: [id])
+  invoices             Invoice[]
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  cancelled
+  trial
+
+  @@map("subscription_status")
+}
+
+model Invoice {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subscriptionId    String          @db.Uuid @map("subscription_id")
+  userId            String          @db.Uuid @map("user_id")
+  amountIdr         Decimal         @db.Decimal(15, 2) @map("amount_idr")
+  /// pending | paid | failed | void
+  status            InvoiceStatus
+  issuedAt          DateTime        @map("issued_at") @db.Timestamptz
+  paidAt            DateTime?       @map("paid_at") @db.Timestamptz
+  dueAt             DateTime?       @map("due_at") @db.Timestamptz
+  gatewayInvoiceId  String?         @db.VarChar(255) @map("gateway_invoice_id")
+  pdfUrl            String?         @map("pdf_url")
+  metadata          Json?
+
+  subscription      Subscription    @relation(fields: [subscriptionId], references: [id])
+  user              User            @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  pending
+  paid
+  failed
+  void
+
+  @@map("invoice_status")
+}
+
+model UsageMeter {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String   @db.Uuid @map("user_id")
+  /// connectors_active | manual_assets_total | api_calls_hourly | api_calls_daily
+  metricName   String   @db.VarChar(50) @map("metric_name")
+  currentValue Int      @default(0) @map("current_value")
+  periodStart  DateTime @map("period_start") @db.Timestamptz
+  periodEnd    DateTime @map("period_end") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user         User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, metricName, periodStart])
+  @@map("usage_meters")
+}
+
+// ============================================================
+// DEVELOPER API — OAuth2 & API Keys
+// ============================================================
+
+model OauthClient {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String   @db.Uuid @map("user_id")
+  name             String   @db.VarChar(200)
+  clientId         String   @unique @db.VarChar(100) @map("client_id")
+  clientSecretHash String   @db.VarChar(255) @map("client_secret_hash")
+  redirectUris     String[] @map("redirect_uris")
+  allowedScopes    String[] @map("allowed_scopes")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  authCodes        OauthAuthorizationCode[]
+  apiKeys          ApiKey[]
+
+  @@map("oauth_clients")
+}
+
+model OauthAuthorizationCode {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId    String    @db.VarChar(100) @map("client_id")
+  userId      String    @db.Uuid @map("user_id")
+  /// SHA-256 dari raw authorization code
+  codeHash    String    @db.VarChar(64) @map("code_hash")
+  scope       String[]
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz
+  usedAt      DateTime? @map("used_at") @db.Timestamptz
+  redirectUri String    @map("redirect_uri")
+
+  client      OauthClient @relation(fields: [clientId], references: [clientId])
+
+  @@index([codeHash])
+  @@map("oauth_authorization_codes")
+}
+
+model ApiKey {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String      @db.Uuid @map("user_id")
+  clientId      String?     @db.Uuid @map("client_id")
+  /// SHA-256 dari raw API key — raw key hanya ditampilkan sekali saat pembuatan
+  keyHash       String      @unique @db.VarChar(64) @map("key_hash")
+  /// Prefix untuk display: "jc_prod_****" — bukan sensitive
+  keyPrefix     String      @db.VarChar(10) @map("key_prefix")
+  /// sandbox | production
+  environment   String      @db.VarChar(20)
+  allowedScopes String[]    @map("allowed_scopes")
+  lastUsedAt    DateTime?   @map("last_used_at") @db.Timestamptz
+  expiresAt     DateTime?   @map("expires_at") @db.Timestamptz
+  isActive      Boolean     @default(true) @map("is_active")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  oauthClient   OauthClient? @relation(fields: [clientId], references: [id])
+
+  @@index([userId])
+  @@map("api_keys")
+}
+
+// ============================================================
+// AUDIT LOG (append-only — enforce via trigger, lihat prisma/sql/audit_log.sql)
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ts         DateTime @default(now()) @db.Timestamptz
+  actorId    String?  @db.Uuid @map("actor_id")
+  /// user | system | api_key
+  actorType  String   @default("user") @db.VarChar(20) @map("actor_type")
+  /// auth:login | auth:logout | user:update | connector:add | dll
+  action     String   @db.VarChar(100)
+  /// user | connector | manual_asset | dll
+  targetType String?  @db.VarChar(50) @map("target_type")
+  targetId   String?  @db.Uuid @map("target_id")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  metadata   Json?
+
+  @@index([actorId, ts(sort: Desc)])
+  @@index([ts(sort: Desc)])
+  @@map("audit_log")
+}

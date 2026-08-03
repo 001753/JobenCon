@@ -1,0 +1,51 @@
+{
+  "name": "jobencon",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Joben Connect — Platform agregasi data aset keuangan multi-kategori (Indonesia & SEA)",
+  "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "dev:auth": "pnpm --filter @jobencon/auth-service dev",
+    "dev:gateway": "pnpm --filter @jobencon/api-gateway dev",
+    "test": "pnpm -r test",
+    "test:ci": "pnpm -r test -- --ci --coverage",
+    "lint": "eslint packages --ext .ts,.tsx --max-warnings 0",
+    "lint:fix": "eslint packages --ext .ts,.tsx --fix",
+    "format": "prettier --write \"packages/**/*.{ts,tsx,json}\"",
+    "format:check": "prettier --check \"packages/**/*.{ts,tsx,json}\"",
+    "typecheck": "pnpm -r typecheck",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "db:reset": "prisma migrate reset"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-import": "^2.29.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "prisma": "^6.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "esbuild", "prisma"]
+  }
+}
