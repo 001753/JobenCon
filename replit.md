@@ -33,6 +33,7 @@ prisma/
 ### Setup awal
 ```bash
 pnpm install
+pnpm --filter @jobencon/shared build   # Build shared package terlebih dahulu
 pnpm db:migrate      # Jalankan migration
 pnpm db:seed         # Seed plans data
 ```
