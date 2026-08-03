@@ -19,6 +19,7 @@ LOG_LEVEL = "info"
 NODE_ENV = "development"
 RATE_LIMIT_MAX = "100"
 RATE_LIMIT_WINDOW_MS = "60000"
+JWT_REFRESH_EXPIRES_IN = "30d"
 
 [workflows]
 runButton = "Project"
