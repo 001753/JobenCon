@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
@@ -47,12 +47,17 @@ function requireEnv(name: string): string {
  * Di production, ganti dengan pgcrypto AES-256 via Prisma raw query.
  * Phase 0: HMAC cukup untuk isolasi data; Phase 1 migrasi ke pgcrypto.
  */
-function encryptEmail(email: string): Buffer {
+function encryptEmail(email: string): Uint8Array<ArrayBuffer> {
   const secret = requireEnv('JWT_SECRET');
   const hmac = createHmac('sha256', secret);
   hmac.update(email.toLowerCase().trim());
-  // Store as deterministic bytes — allows unique constraint
-  return Buffer.from(hmac.digest('hex'), 'utf-8');
+  // Store as deterministic bytes — allows unique constraint.
+  // Prisma Bytes field requires Uint8Array<ArrayBuffer> (not ArrayBufferLike),
+  // so we copy into a fresh ArrayBuffer via slice().
+  const hex = hmac.digest('hex');
+  const buf = Buffer.from(hex, 'utf-8');
+  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer;
+  return new Uint8Array(ab);
 }
 
 export class AuthService {
@@ -80,7 +85,7 @@ export class AuthService {
     const encryptedEmail = encryptEmail(email);
 
     // Buat user dan trigger email verification dalam satu transaction
-    const user = await this.prisma.$transaction(async (tx: typeof this.prisma) => {
+    const user = await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const newUser = await tx.user.create({
         data: {
           email: encryptedEmail,

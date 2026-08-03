@@ -1,0 +1,1 @@
+- [Phase 0 setup & TypeScript quirks](phase0-setup.md) — Prisma Bytes field, $transaction types, and env var layout for this monorepo
