@@ -42,7 +42,7 @@ async function proxyToPortfolio(
   const { statusCode, body: responseBody } = await undiciRequest(url, {
     method: method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     headers: requestHeaders,
-    body: method !== 'GET' && method !== 'DELETE' ? JSON.stringify(body) : undefined,
+    body: method !== 'GET' && method !== 'DELETE' ? JSON.stringify(body) : null,
     bodyTimeout: 30_000,
     headersTimeout: 30_000,
   });
