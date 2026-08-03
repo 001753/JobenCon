@@ -129,7 +129,11 @@ jobs:
         run: pnpm db:migrate:deploy
 
       - name: Run tests with coverage
-        run: pnpm test:ci
+        run: |
+          node --experimental-vm-modules packages/auth-service/node_modules/jest/bin/jest.js \
+            --config packages/auth-service/jest.config.js --coverage
+          node --experimental-vm-modules packages/api-gateway/node_modules/jest/bin/jest.js \
+            --config packages/api-gateway/jest.config.js --coverage
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4

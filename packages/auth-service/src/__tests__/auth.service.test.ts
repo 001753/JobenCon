@@ -1,49 +1,15 @@
 /**
  * Unit tests — Auth Service
- * Database di-mock dengan jest, tidak perlu koneksi nyata.
+ * Fokus: shared utilities dan schema validation (tanpa DB connection).
  */
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-
 import { sha256, sha256Raw, generateToken } from '@jobencon/shared';
-
-// Mock PrismaClient
-const mockPrisma = {
-  user: {
-    findUnique: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-  },
-  session: {
-    create: jest.fn(),
-    findFirst: jest.fn(),
-    update: jest.fn(),
-  },
-  emailVerification: {
-    create: jest.fn(),
-    findFirst: jest.fn(),
-    update: jest.fn(),
-  },
-  auditLog: {
-    create: jest.fn(),
-  },
-  consentLog: {
-    create: jest.fn(),
-  },
-  tenant: {
-    create: jest.fn(),
-  },
-  $transaction: jest.fn(async (fn: (tx: typeof mockPrisma) => Promise<unknown>) => {
-    return fn(mockPrisma);
-  }),
-  $queryRaw: jest.fn(),
-};
 
 // Set required env vars
 process.env['JWT_SECRET'] = 'test-jwt-secret-that-is-at-least-32-chars-long';
 process.env['JWT_REFRESH_SECRET'] = 'test-refresh-secret-that-is-at-least-32-chars';
 
-// ── Crypto utilities ────────────────────────────────────────────────
+// ── Crypto utilities ─────────────────────────────────────────────────
 describe('Crypto utilities', () => {
   it('sha256 normalizes input (lowercase + trim)', () => {
     expect(sha256('USER@EXAMPLE.COM ')).toBe(sha256('user@example.com'));
@@ -60,7 +26,7 @@ describe('Crypto utilities', () => {
     expect(sha256Raw('ABC')).not.toBe(sha256Raw('abc'));
   });
 
-  it('generateToken returns hex string of specified length', () => {
+  it('generateToken returns hex string of correct length', () => {
     const token = generateToken(32);
     expect(token).toHaveLength(64); // 32 bytes = 64 hex chars
     expect(token).toMatch(/^[0-9a-f]+$/);
@@ -73,91 +39,94 @@ describe('Crypto utilities', () => {
   });
 });
 
-// ── Auth schemas ────────────────────────────────────────────────────
-describe('Auth schemas', () => {
+// ── Auth schemas ──────────────────────────────────────────────────────
+describe('RegisterSchema', () => {
   let RegisterSchema: (typeof import('@jobencon/shared'))['RegisterSchema'];
-  let LoginSchema: (typeof import('@jobencon/shared'))['LoginSchema'];
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     const shared = await import('@jobencon/shared');
     RegisterSchema = shared.RegisterSchema;
-    LoginSchema = shared.LoginSchema;
   });
 
-  describe('RegisterSchema', () => {
-    it('accepts valid input', () => {
-      const result = RegisterSchema.safeParse({
-        email: 'test@example.com',
-        password: 'StrongPass1!',
-        name: 'Test User',
-      });
-      expect(result.success).toBe(true);
+  it('accepts valid input', () => {
+    const result = RegisterSchema.safeParse({
+      email: 'test@example.com',
+      password: 'StrongPass1!',
+      name: 'Test User',
     });
-
-    it('normalizes email to lowercase', () => {
-      const result = RegisterSchema.safeParse({
-        email: 'TEST@EXAMPLE.COM',
-        password: 'StrongPass1!',
-      });
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.email).toBe('test@example.com');
-      }
-    });
-
-    it('rejects short password', () => {
-      const result = RegisterSchema.safeParse({
-        email: 'test@example.com',
-        password: 'Short1!',
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it('rejects password without uppercase', () => {
-      const result = RegisterSchema.safeParse({
-        email: 'test@example.com',
-        password: 'weakpassword1!',
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it('rejects password without special char', () => {
-      const result = RegisterSchema.safeParse({
-        email: 'test@example.com',
-        password: 'WeakPassword123',
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it('rejects invalid email', () => {
-      const result = RegisterSchema.safeParse({
-        email: 'not-an-email',
-        password: 'StrongPass1!',
-      });
-      expect(result.success).toBe(false);
-    });
+    expect(result.success).toBe(true);
   });
 
-  describe('LoginSchema', () => {
-    it('accepts valid input', () => {
-      const result = LoginSchema.safeParse({
-        email: 'test@example.com',
-        password: 'anypassword',
-      });
-      expect(result.success).toBe(true);
+  it('normalizes email to lowercase', () => {
+    const result = RegisterSchema.safeParse({
+      email: 'TEST@EXAMPLE.COM',
+      password: 'StrongPass1!',
     });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.email).toBe('test@example.com');
+    }
+  });
 
-    it('rejects empty password', () => {
-      const result = LoginSchema.safeParse({
-        email: 'test@example.com',
-        password: '',
-      });
-      expect(result.success).toBe(false);
+  it('rejects short password (< 10 chars)', () => {
+    const result = RegisterSchema.safeParse({
+      email: 'test@example.com',
+      password: 'Short1!',
     });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects password without uppercase', () => {
+    const result = RegisterSchema.safeParse({
+      email: 'test@example.com',
+      password: 'weakpassword1!',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects password without special char', () => {
+    const result = RegisterSchema.safeParse({
+      email: 'test@example.com',
+      password: 'WeakPassword123',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid email', () => {
+    const result = RegisterSchema.safeParse({
+      email: 'not-an-email',
+      password: 'StrongPass1!',
+    });
+    expect(result.success).toBe(false);
   });
 });
 
-// ── Error classes ───────────────────────────────────────────────────
+describe('LoginSchema', () => {
+  let LoginSchema: (typeof import('@jobencon/shared'))['LoginSchema'];
+
+  beforeAll(async () => {
+    const shared = await import('@jobencon/shared');
+    LoginSchema = shared.LoginSchema;
+  });
+
+  it('accepts valid input', () => {
+    const result = LoginSchema.safeParse({
+      email: 'test@example.com',
+      password: 'anypassword',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects empty password', () => {
+    const result = LoginSchema.safeParse({
+      email: 'test@example.com',
+      password: '',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ── Error classes ─────────────────────────────────────────────────────
 describe('Error classes', () => {
   it('AppError has correct properties', async () => {
     const { AppError, isAppError } = await import('@jobencon/shared');

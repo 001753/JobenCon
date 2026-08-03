@@ -19,3 +19,45 @@ LOG_LEVEL = "info"
 NODE_ENV = "development"
 RATE_LIMIT_MAX = "100"
 RATE_LIMIT_WINDOW_MS = "60000"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "API Gateway"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Auth Service"
+
+[[workflows.workflow]]
+name = "API Gateway"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm dev:gateway"
+waitForPort = 3000
+
+[[workflows.workflow]]
+name = "Auth Service"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm dev:auth"
+waitForPort = 3001
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+
+[[ports]]
+localPort = 3001
+externalPort = 3001

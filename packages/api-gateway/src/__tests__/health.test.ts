@@ -2,7 +2,6 @@
  * Integration test — API Gateway health endpoint
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import type { FastifyInstance } from 'fastify';
 
 // Set env sebelum import app

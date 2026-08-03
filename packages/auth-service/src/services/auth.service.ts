@@ -13,7 +13,6 @@ import {
   JWT_REFRESH_EXPIRES_IN_DAYS,
   AuthError,
   ConflictError,
-  NotFoundError,
   ValidationError,
   sha256,
   sha256Raw,
@@ -32,10 +31,8 @@ interface TokenPair {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;
+  tokenType: 'Bearer';
 }
-
-const JWT_SECRET = process.env['JWT_SECRET'];
-const JWT_REFRESH_SECRET = process.env['JWT_REFRESH_SECRET'];
 
 function requireEnv(name: string): string {
   const val = process.env[name];
@@ -83,7 +80,7 @@ export class AuthService {
     const encryptedEmail = encryptEmail(email);
 
     // Buat user dan trigger email verification dalam satu transaction
-    const user = await this.prisma.$transaction(async (tx) => {
+    const user = await this.prisma.$transaction(async (tx: typeof this.prisma) => {
       const newUser = await tx.user.create({
         data: {
           email: encryptedEmail,
@@ -210,9 +207,9 @@ export class AuthService {
 
     // Issue tokens dan buat session
     const tokens = await this.createSession(user.id, email, user.isEmailVerified, {
-      deviceFingerprint: input.deviceFingerprint,
-      ipAddress: ctx.ipAddress,
-      userAgent: ctx.userAgent,
+      ...(input.deviceFingerprint !== undefined ? { deviceFingerprint: input.deviceFingerprint } : {}),
+      ...(ctx.ipAddress !== undefined ? { ipAddress: ctx.ipAddress } : {}),
+      ...(ctx.userAgent !== undefined ? { userAgent: ctx.userAgent } : {}),
     });
 
     // Update last login
@@ -292,7 +289,10 @@ export class AuthService {
       session.user.id,
       emailPlaceholder,
       session.user.isEmailVerified,
-      { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+      {
+        ...(ctx.ipAddress !== undefined ? { ipAddress: ctx.ipAddress } : {}),
+        ...(ctx.userAgent !== undefined ? { userAgent: ctx.userAgent } : {}),
+      },
     );
 
     // Audit log
@@ -458,7 +458,7 @@ export class AuthService {
       accessToken,
       refreshToken: signedRefreshToken,
       expiresAt: decoded.exp,
-      tokenType: 'Bearer' as const,
+      tokenType: 'Bearer' as const satisfies 'Bearer',
     };
   }
 }
